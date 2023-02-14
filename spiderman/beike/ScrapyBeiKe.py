@@ -54,6 +54,15 @@ class ScrapyBeiKe:
             'Hm_lpvt_9152f8221cb6243a53c83b956842be8a': '1675664498',
             'srcid': 'eyJ0Ijoie1wiZGF0YVwiOlwiY2UzNmVjM2YzNzZhZGRjNzllNTA4MzM3Y2E4ZjUzMzZiNWZkZmZkODA0ZDE2ODU4ZmVjYzU0NTFkNTJkMDQ5ZjZiY2M4OWRkMGFhMWE1ZjJhY2FjZDA1NWQyNjZhZjIxODU0YWJiNDFmNGY2MmVjMjA4NTM1NDIxN2YxYjFiMTFjNWE0OWIwMmMzOGY3OTA4OTJhZjlkZjFhN2IwN2NhNDgzNTBhMmNiNzEyYjUzYTRjYjg0NzE2OWFhNGQ0ZjYwYjg1MzNiNTFiOWY5OWExYzc2YTk4OTNjZTc2OGM5MGVhOThlMmNkZDc4YmYyNGU3Mzk5YzM1ZGEwMDEzMGI5M1wiLFwia2V5X2lkXCI6XCIxXCIsXCJzaWduXCI6XCI1NjY5YzFkMVwifSIsInIiOiJodHRwczovL3N1LmtlLmNvbS9jaGVuZ2ppYW8vIiwib3MiOiJ3ZWIiLCJ2IjoiMC4xIn0='
         }
+        self.conn = pymysql.connect(
+            host='192.168.220.236',  # 与本地数据库建立连接，可以尝试其他电脑的ip地址
+            port=3306,  # 端口可写可不写，默认3306
+            user='root',
+            password="Gepoint",
+            database="scrapy",  # 选择一个库，关键字可以简化为db
+            charset="utf8mb4",
+            cursorclass=pymysql.cursors.DictCursor
+        )  # 更多参数可以点进connect的源码去看
         # 判断配置文件是否存在/Check if the configuration file exists
         if os.path.exists('config.ini'):
             self.config = configparser.ConfigParser()
@@ -123,17 +132,17 @@ class ScrapyBeiKe:
                 rent = houseInfo[1].text.strip().replace(
                     '正在出租', '').replace('套', '')
             else:
-                rent = ''
+                rent = '0'
             res.append({
                 "plot": info.find(attrs={'class': 'maidian-detail'}).text.strip(),
                 "deal": houseInfo[0].text.strip().replace('90天成交', '').replace('套', ''),
                 "rent": rent,
                 "district": li.find(attrs={'class': 'district'}).text.strip(),
                 "bizcircle": li.find(attrs={'class': 'bizcircle'}).text.strip(),
-                'priceDesc': li.find(attrs={'class': 'priceDesc'}).text.strip(),
+                'pricedesc': li.find(attrs={'class': 'priceDesc'}).text.strip(),
                 "price": li.find(attrs={'class': 'totalPrice'}).span.text.strip(),
                 # li.find(attrs={'class': 'sellCountDesc'}).text.strip()+':'+
-                "sellCount": li.find(attrs={'class': 'totalSellCount'}).span.text.strip(),
+                "sellcount": li.find(attrs={'class': 'totalSellCount'}).span.text.strip(),
                 "href": info.find(attrs={'class': 'maidian-detail'}).attrs['href'],
                 'id': li.attrs['data-id']
             })
@@ -246,12 +255,29 @@ class ScrapyBeiKe:
             pf.to_excel(writer, sheet_name="Sheet1", index=False)
             # writer.save()  # 不要用save会提示内容错误
 
+    async def insert_plots(self, plots: list):
+        try:
+            with self.conn.cursor() as cursor:
+                for plot in plots:
+                    print(plot)
+                    sql = f"INSERT INTO scrapy.suzhou_plots (id, plot, deal, rent, district, bizcircle, pricedesc, price, sellcount, href) VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);"
+                    cursor.execute(
+                        sql, (plot['id'], plot['plot'], plot['deal'], plot['rent'], plot['district'], plot['bizcircle'], plot['pricedesc'], plot['price'], plot['sellcount'], plot['href']))
+                self.conn.commit()  # 提交
+        except Exception as e:
+            self.conn.rollback()  # 回滚事务
+            print('数据插入失败！原因:{}'.format(e))
+            print(sys.exc_info())  # 打印错误信息
+        finally:
+            self.conn.close()
+
 
 async def async_test(original_url: str = None) -> None:
     # print(await api.get_xiaoqu(url=original_url, page=1))
     # print(await api.get_sell('https://su.ke.com/ershoufang/', '2320033135776302'))
     # print(await api.get_deal('https://su.ke.com/chengjiao/', '2320033135776302'))
     xiaoqus = await api.get_xiaoqu(url=original_url, page=1)
+    await api.insert_plots(xiaoqus)
     for xiaoqu in xiaoqus:
         id = xiaoqu['id']
         plot = xiaoqu['plot']
@@ -386,13 +412,13 @@ def mysql_test_delete():
 
 if __name__ == '__main__':
     api = ScrapyBeiKe()
-    # # 在售小区
-    # chushou_url = 'https://su.ke.com/ershoufang/c2320033135776302/'
-    # # 已售小区
-    # chenjiao_url = 'https://su.ke.com/chengjiao/c2320033135776302/'
-    # asyncio.run(async_test(
-    #     original_url='https://su.ke.com/xiaoqu/zhangjiagang/'))
+    # 在售小区
+    chushou_url = 'https://su.ke.com/ershoufang/c2320033135776302/'
+    # 已售小区
+    chenjiao_url = 'https://su.ke.com/chengjiao/c2320033135776302/'
+    asyncio.run(async_test(
+        original_url='https://su.ke.com/xiaoqu/zhangjiagang/'))
     # mysql_test_insert()
     # mysql_test_query()
     # mysql_test_update()
-    mysql_test_delete()
+    # mysql_test_delete()
