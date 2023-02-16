@@ -91,7 +91,7 @@ class ScrapyBeiKe:
 
     @retry(stop=stop_after_attempt(3), wait=wait_random(min=1, max=2))
     async def get_page_html(self, original_url: str) -> Union[str, None]:
-        print(original_url)
+        # print(original_url)
         try:
             async with aiohttp.ClientSession(cookies=self.cookies) as session:
                 async with session.get(original_url, headers=self.headers, proxy=self.proxies, timeout=10) as response:
@@ -140,7 +140,7 @@ class ScrapyBeiKe:
                 "district": li.find(attrs={'class': 'district'}).text.strip(),
                 "bizcircle": li.find(attrs={'class': 'bizcircle'}).text.strip(),
                 'pricedesc': li.find(attrs={'class': 'priceDesc'}).text.strip(),
-                "price": li.find(attrs={'class': 'totalPrice'}).span.text.strip(),
+                "price": li.find(attrs={'class': 'totalPrice'}).span.text.strip().replace('暂无数据', '0'),
                 # li.find(attrs={'class': 'sellCountDesc'}).text.strip()+':'+
                 "sellcount": li.find(attrs={'class': 'totalSellCount'}).span.text.strip(),
                 "href": info.find(attrs={'class': 'maidian-detail'}).attrs['href'],
@@ -170,6 +170,11 @@ class ScrapyBeiKe:
         # print(sellListContent)
         if sellListContent is None:
             return None
+        '''
+        当前小区暂无在售房源，为您推荐附近小区房源。
+        '''
+        if soup.find(attrs={'class': 'm-noresult space-lite'}) is not None:
+            return None
         res = []
         # print(sellListContent.select('li'))
         for li in sellListContent.select('li'):
@@ -185,14 +190,14 @@ class ScrapyBeiKe:
                     isVr = ''
                 res.append({
                     'detail': detail.replace(' ', ''),
-                    'positionInfo': info.find(attrs={'class': 'positionInfo'}).a.text.strip(),
-                    'houseInfo': info.find(attrs={'class': 'houseInfo'}).text.strip().replace('\r', '').replace('\n', '').replace(' ', ''),
-                    'followInfo': info.find(attrs={'class': 'followInfo'}).text.strip().replace('\r', '').replace('\n', '').replace(' ', ''),
-                    'isVrFutureHome': isVr,
-                    'totalPrice': info.find(attrs={'class': 'totalPrice totalPrice2'}).span.text.strip(),
-                    'unitPrice': info.find(attrs={'class': 'unitPrice'}).span.text.strip().replace('元/平', ''),
+                    'positioninfo': info.find(attrs={'class': 'positionInfo'}).a.text.strip(),
+                    'houseinfo': info.find(attrs={'class': 'houseInfo'}).text.strip().replace('\r', '').replace('\n', '').replace(' ', ''),
+                    'followinfo': info.find(attrs={'class': 'followInfo'}).text.strip().replace('\r', '').replace('\n', '').replace(' ', ''),
+                    'isvrfuturehome': isVr,
+                    'totalprice': info.find(attrs={'class': 'totalPrice totalPrice2'}).span.text.strip(),
+                    'unitprice': info.find(attrs={'class': 'unitPrice'}).span.text.strip().replace('元/平', '').replace(',', ''),
                     'href': info.find(attrs={'class': 'VIEWDATA CLICKDATA maidian-detail'}).attrs['href'],
-                    'id': info.find(attrs={'class': 'VIEWDATA CLICKDATA maidian-detail'}).attrs['data-maidian']
+                    'id': info.find(attrs={'class': 'VIEWDATA CLICKDATA maidian-detail'}).attrs['href'].replace('https://su.ke.com/ershoufang/', '').replace('.html', '')
                 })
         return res
 
@@ -230,19 +235,19 @@ class ScrapyBeiKe:
                 "type": title.split(' ')[1],  # 房型"
                 "area": title.split(' ')[2].replace('平米', ''),  # 建筑面积
                 # 总价
-                'totalPrice': info.find(attrs={'class': 'totalPrice'}).span.text.strip(),
+                'totalprice': info.find(attrs={'class': 'totalPrice'}).span.text.strip(),
                 # 单价
-                'unitPrice': info.find(attrs={'class': 'unitPrice'}).span.text.strip(),
+                'unitprice': info.find(attrs={'class': 'unitPrice'}).span.text.strip(),
                 # 房源成交时间
-                'dealDate': info.find(attrs={'class': 'dealDate'}).text.strip(),
+                'dealdate': info.find(attrs={'class': 'dealDate'}).text.strip(),
                 # 挂牌价
-                'dealPrice': dealCycleTxt[0].text.strip().replace('挂牌', '').replace('万', ''),
+                'dealprice': dealCycleTxt[0].text.strip().replace('挂牌', '').replace('万', ''),
                 # 成交周期
-                'dealTime': dealCycleTxt[1].text.strip().replace('成交周期', '').replace('天', ''),
-                'houseInfo': info.find(attrs={'class': 'houseInfo'}).text.strip(),
-                'positionInfo': info.find(attrs={'class': 'positionInfo'}).text.strip(),
+                'dealtime': dealCycleTxt[1].text.strip().replace('成交周期', '').replace('天', ''),
+                'houseinfo': info.find(attrs={'class': 'houseInfo'}).text.strip(),
+                'positioninfo': info.find(attrs={'class': 'positionInfo'}).text.strip(),
                 "href": info.find(attrs={'class': 'CLICKDATA maidian-detail'}).attrs['href'],
-                'id': info.find(attrs={'class': 'CLICKDATA maidian-detail'}).attrs['data-maidian'],
+                'id': info.find(attrs={'class': 'CLICKDATA maidian-detail'}).attrs['href'].replace('https://su.ke.com/chengjiao/', '').replace('.html', ''),
             })
         return res
 
@@ -258,82 +263,156 @@ class ScrapyBeiKe:
     async def insert_plots(self, plots: list):
         try:
             with self.conn.cursor() as cursor:
+                '''
+                先从库里查出来将id放入set然后判断是否存在再入库
+                '''
+                sql = f"SELECT id FROM suzhou_plots;"
+                cursor.execute(sql)
+                plotids = cursor.fetchall()
+                ids = set({})
+                for plotid in plotids:
+                    ids.add(plotid['id'])
                 for plot in plots:
-                    print(plot)
-                    sql = f"INSERT INTO scrapy.suzhou_plots (id, plot, deal, rent, district, bizcircle, pricedesc, price, sellcount, href) VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);"
-                    cursor.execute(
-                        sql, (plot['id'], plot['plot'], plot['deal'], plot['rent'], plot['district'], plot['bizcircle'], plot['pricedesc'], plot['price'], plot['sellcount'], plot['href']))
+                    # print(plot)
+                    if plot['id'] not in ids:
+                        ids.add(plot['id'])
+                        sql = f"INSERT INTO suzhou_plots (id, plot, deal, rent, district, bizcircle, pricedesc, price, sellcount, href) VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);"
+                        cursor.execute(
+                            sql, (plot['id'], plot['plot'], plot['deal'], plot['rent'], plot['district'], plot['bizcircle'], plot['pricedesc'], plot['price'], plot['sellcount'], plot['href']))
                 self.conn.commit()  # 提交
         except Exception as e:
             self.conn.rollback()  # 回滚事务
             print('数据插入失败！原因:{}'.format(e))
-            print(sys.exc_info())  # 打印错误信息
-        finally:
-            self.conn.close()
+            print(plots)
+            # print(sys.exc_info())  # 打印错误信息
+        # finally:
+            # self.conn.close()
+
+    async def insert_sells(self, sells: list, plotid: str):
+        try:
+            with self.conn.cursor() as cursor:
+                for sell in sells:
+                    # print(sell)
+                    sql = f"INSERT INTO suzhou_sells (id, detail, positioninfo, houseinfo, followinfo, isvrfuturehome, totalprice, unitprice, href, plotid) VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);"
+                    cursor.execute(
+                        sql, (sell['id'], sell['detail'], sell['positioninfo'], sell['houseinfo'], sell['followinfo'], sell['isvrfuturehome'], sell['totalprice'], sell['unitprice'], sell['href'], plotid))
+                self.conn.commit()  # 提交
+        except Exception as e:
+            self.conn.rollback()  # 回滚事务
+            print('数据插入失败！原因:{}'.format(e))
+            print(sells)
+            # print(sys.exc_info())  # 打印错误信息
+        # finally:
+        #     self.conn.close()
+
+    async def insert_deals(self, deals: list, plotid: str):
+        try:
+            with self.conn.cursor() as cursor:
+                for deal in deals:
+                    # print(deal)
+                    sql = f"INSERT INTO suzhou_deals (id, plot, `type`, area, totalprice, unitprice, dealdate, dealprice, dealtime, houseinfo, positioninfo, href, plotid) VALUES(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);"
+                    cursor.execute(
+                        sql, (deal['id'], deal['plot'], deal['type'], deal['area'], deal['totalprice'], deal['unitprice'], deal['dealdate'], deal['dealprice'], deal['dealtime'], deal['houseinfo'], deal['positioninfo'], deal['href'], plotid))
+                self.conn.commit()  # 提交
+        except Exception as e:
+            self.conn.rollback()  # 回滚事务
+            print('数据插入失败！原因:{}'.format(e))
+            print(deals)
+            # print(sys.exc_info())  # 打印错误信息
+        # finally:
+        #     self.conn.close()
+
+
+async def async_test2():
+    html = await api.get_page_html('https://su.ke.com/chengjiao/107105490697.html')
+    soup = BeautifulSoup(html, 'lxml')
+    scriptResults = soup('script')
+    for script in scriptResults:
+        if 'window.GLOBAL_INFOS' in str(script):
+            print(script)
 
 
 async def async_test(original_url: str = None) -> None:
     # print(await api.get_xiaoqu(url=original_url, page=1))
     # print(await api.get_sell('https://su.ke.com/ershoufang/', '2320033135776302'))
     # print(await api.get_deal('https://su.ke.com/chengjiao/', '2320033135776302'))
-    xiaoqus = await api.get_xiaoqu(url=original_url, page=1)
-    await api.insert_plots(xiaoqus)
-    for xiaoqu in xiaoqus:
-        id = xiaoqu['id']
-        plot = xiaoqu['plot']
-        print(plot)
-        sells = await api.get_sell('https://su.ke.com/ershoufang/', id=id)
-        if len(sells) > 0:
-            await api.export_excel(table_name=plot+'在售.xlsx', export_data=sells, columns_map={
-                "detail": "详情",
-                "positionInfo": "位置",
-                "houseInfo": "房屋信息",
-                "followInfo": "关注",
-                "isVrFutureHome": "VR看房",
-                "totalPrice": "总价",
-                "unitPrice": "单价",
-                "href": "地址",
-                'id': 'id'
-            }, order=[
-                "detail",
-                "positionInfo",
-                "houseInfo",
-                "followInfo",
-                "isVrFutureHome",
-                "totalPrice",
-                "unitPrice",
-                "href",
-                "id"
-            ])
-        deals = await api.get_deal('https://su.ke.com/chengjiao/', id=id)
-        if len(deals) > 0:
-            await api.export_excel(table_name=plot+'成交.xlsx', export_data=deals, columns_map={
-                "plot": "小区",
-                "type": "房型",
-                "area": "建筑面积(平米)",
-                "totalPrice": "总价",
-                "unitPrice": "单价",
-                "dealDate": "出售时间",
-                "dealPrice": "挂牌(万)",
-                "dealTime": "成交周期(天)",
-                "houseInfo": "位置",
-                "positionInfo": "房源描述",
-                "href": "地址",
-                'id': 'id'
-            }, order=[
-                "plot",
-                "type",
-                "area",
-                "totalPrice",
-                "unitPrice",
-                "dealDate",
-                "dealPrice",
-                "dealTime",
-                "houseInfo",
-                "positionInfo",
-                "href",
-                'id'
-            ])
+    # xiaoqus = await api.get_xiaoqu(url=original_url)
+    # await api.insert_plots(xiaoqus)
+    try:
+        with api.conn.cursor() as cursor:
+            sql = f"SELECT id FROM suzhou_plots;"
+            cursor.execute(sql)
+            plots = cursor.fetchall()
+            for plot in plots:
+                id = plot['id']
+                print(id)
+                sells = await api.get_sell('https://su.ke.com/ershoufang/', id=id)
+                await api.insert_sells(sells, id)
+                # deals = await api.get_deal('https://su.ke.com/chengjiao/', id=id)
+                # await api.insert_deals(deals, id)
+    except Exception as e:
+        print('数据查询失败！原因:{}'.format(e))
+        # print(sys.exc_info())  # 打印错误信息
+    finally:
+        api.conn.close()
+    # for xiaoqu in xiaoqus:
+    #     id = xiaoqu['id']
+    # plot = xiaoqu['plot']
+    # print(plot)
+    # sells = await api.get_sell('https://su.ke.com/ershoufang/', id=id)
+    # if len(sells) > 0:
+    #     await api.insert_sells(sells)
+    # await api.export_excel(table_name=plot+'在售.xlsx', export_data=sells, columns_map={
+    #     "detail": "详情",
+    #     "positionInfo": "位置",
+    #     "houseInfo": "房屋信息",
+    #     "followInfo": "关注",
+    #     "isVrFutureHome": "VR看房",
+    #     "totalPrice": "总价",
+    #     "unitPrice": "单价",
+    #     "href": "地址",
+    #     'id': 'id'
+    # }, order=[
+    #     "detail",
+    #     "positionInfo",
+    #     "houseInfo",
+    #     "followInfo",
+    #     "isVrFutureHome",
+    #     "totalPrice",
+    #     "unitPrice",
+    #     "href",
+    #     "id"
+    # ])
+    # deals = await api.get_deal('https://su.ke.com/chengjiao/', id=id)
+    # if len(deals) > 0:
+    #     await api.insert_deals(deals)
+    # await api.export_excel(table_name=plot+'成交.xlsx', export_data=deals, columns_map={
+    #     "plot": "小区",
+    #     "type": "房型",
+    #     "area": "建筑面积(平米)",
+    #     "totalPrice": "总价",
+    #     "unitPrice": "单价",
+    #     "dealDate": "出售时间",
+    #     "dealPrice": "挂牌(万)",
+    #     "dealTime": "成交周期(天)",
+    #     "houseInfo": "位置",
+    #     "positionInfo": "房源描述",
+    #     "href": "地址",
+    #     'id': 'id'
+    # }, order=[
+    #     "plot",
+    #     "type",
+    #     "area",
+    #     "totalPrice",
+    #     "unitPrice",
+    #     "dealDate",
+    #     "dealPrice",
+    #     "dealTime",
+    #     "houseInfo",
+    #     "positionInfo",
+    #     "href",
+    #     'id'
+    # ])
 
 
 def get_conn():
@@ -369,10 +448,14 @@ def mysql_test_query():
     conn = get_conn()
     try:
         with conn.cursor() as cursor:
-            sql = f"SELECT * FROM suzhou_plots;"
+            sql = f"SELECT id FROM suzhou_plots;"
             cursor.execute(sql)
-            result = cursor.fetchall()
-            print(result)
+            plots = cursor.fetchall()
+            ids = set({})
+            for plot in plots:
+                ids.add(plot['id'])
+            if '2320045050888626' in ids:
+                print(ids)
     except Exception as e:
         print('数据查询失败！原因:{}'.format(e))
         print(sys.exc_info())  # 打印错误信息
@@ -416,8 +499,9 @@ if __name__ == '__main__':
     chushou_url = 'https://su.ke.com/ershoufang/c2320033135776302/'
     # 已售小区
     chenjiao_url = 'https://su.ke.com/chengjiao/c2320033135776302/'
-    asyncio.run(async_test(
-        original_url='https://su.ke.com/xiaoqu/zhangjiagang/'))
+    # asyncio.run(async_test(
+    #     original_url='https://su.ke.com/xiaoqu/zhangjiagang/'))
+    asyncio.run(async_test2())
     # mysql_test_insert()
     # mysql_test_query()
     # mysql_test_update()
